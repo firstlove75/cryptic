@@ -1,24 +1,18 @@
-# FROM: chọn "image" nền — python:3.12-slim là Python 3.12
-# bản "slim" = nhỏ gọn, không có các tool thừa
+# Base image: python:3.12-slim is a minimal Python 3.12 image without dev tools
 FROM python:3.12-slim
 
-# WORKDIR: đặt thư mục làm việc bên trong container
-# Mọi lệnh sau đây đều chạy trong /app
+# Set the working directory inside the container — all subsequent commands run here
 WORKDIR /app
 
-# COPY requirements.txt trước (tách riêng để tận dụng Docker cache)
-# Lý do: nếu chỉ thay đổi code .py, Docker không cần cài lại thư viện
+# Copy requirements first (separate layer) so Docker cache skips pip install
+# when only .py files change
 COPY requirements.txt .
 
-# RUN: chạy lệnh trong quá trình build image
-# --no-cache-dir: không lưu cache pip → image nhỏ hơn
+# Install dependencies; --no-cache-dir keeps the image smaller
 RUN pip install --no-cache-dir -r requirements.txt
 
-# COPY toàn bộ code vào container
-# Dấu . đầu = thư mục hiện tại trên máy host
-# Dấu . cuối = /app trong container (WORKDIR)
+# Copy the rest of the source code into the container
 COPY . .
 
-# CMD: lệnh chạy khi container khởi động
-# Chạy main.py một lần rồi thoát (exit 0 nếu thành công)
+# Default command: run the pipeline once and exit (exit 0 on success)
 CMD ["python", "main.py"]

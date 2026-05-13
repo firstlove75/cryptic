@@ -1,87 +1,76 @@
 """
-Tải bài viết từ Zendesk Help Center API của OptiSigns,
-chuyển sang Markdown, lưu vào thư mục articles/.
+Fetch articles from the OptiSigns Zendesk Help Center API,
+convert them to Markdown, and save to articles/.
 
-Phát hiện bài mới/thay đổi bằng cách so sánh MD5 hash.
+Change detection: compare MD5 hashes between runs.
 """
 
-import requests    # gửi HTTP request
-import hashlib     # tạo MD5 hash để so sánh nội dung
-import json        # đọc/ghi file JSON (lưu hash cũ)
-import os          # đọc biến môi trường, kiểm tra file
-from pathlib import Path  # thao tác đường dẫn file kiểu hiện đại
+import requests
+import hashlib
+import json
+from pathlib import Path
 
-# Import hàm chuyển đổi HTML → Markdown từ file cùng thư mục
 from scraper.html_to_md import html_to_markdown
 
 # -----------------------------------------------------------------
-# Cấu hình
+# Config
 # -----------------------------------------------------------------
 
-# API endpoint của Zendesk — trả về JSON danh sách bài viết
-# per_page=100 : lấy 100 bài mỗi trang (tối đa Zendesk cho phép)
+# Zendesk API endpoint — returns paginated JSON list of articles
+# per_page=100 is the maximum Zendesk allows per request
 BASE_URL = (
     "https://support.optisigns.com/api/v2/help_center/en-us/articles.json"
     "?per_page=100"
 )
 
-# Thư mục lưu file .md
 ARTICLES_DIR = Path("articles")
 
-# File JSON lưu hash của từng bài — dùng để phát hiện bài thay đổi
+# Persists content hashes across runs to detect new/changed articles
 HASH_FILE = Path(".article_hashes.json")
 
 
 # -----------------------------------------------------------------
-# Hàm phụ trợ
+# Helpers
 # -----------------------------------------------------------------
 
 def fetch_all_articles() -> list[dict]:
     """
-    Gọi Zendesk API, lấy toàn bộ bài viết.
-    Zendesk dùng pagination: mỗi response có trường 'next_page'
-    nếu còn trang tiếp theo.
+    Fetch every article from the Zendesk API, following pagination.
+    Zendesk includes a 'next_page' URL in each response until the last page.
     """
     articles = []
-    url = BASE_URL  # bắt đầu từ trang 1
+    url = BASE_URL
 
-    while url:  # lặp cho đến khi không còn trang tiếp theo
+    while url:
         print(f"  Fetching: {url}")
         response = requests.get(url, timeout=30)
 
-        # raise_for_status(): nếu HTTP status là 4xx/5xx thì ném exception
-        # — tốt hơn là để code chạy tiếp với dữ liệu rỗng/sai
+        # Raise immediately on 4xx/5xx so we don't silently process bad data
         response.raise_for_status()
 
-        data = response.json()  # parse JSON → Python dict
-
-        # data["articles"] là list các bài trong trang này
+        data = response.json()
         articles.extend(data["articles"])
 
-        # next_page = None nếu đây là trang cuối
+        # None on the last page
         url = data.get("next_page")
 
     return articles
 
 
 def compute_hash(text: str) -> str:
-    """Tạo MD5 hash của một chuỗi — dùng để so sánh nội dung."""
-    # encode("utf-8"): chuyển string → bytes (hashlib cần bytes)
+    """Return the MD5 hex digest of a string."""
     return hashlib.md5(text.encode("utf-8")).hexdigest()
 
 
 def load_hashes() -> dict:
-    """
-    Đọc file hash cũ từ đĩa.
-    Trả về {} nếu file chưa tồn tại (lần chạy đầu tiên).
-    """
+    """Load hashes saved from the previous run. Returns {} on first run."""
     if HASH_FILE.exists():
         return json.loads(HASH_FILE.read_text(encoding="utf-8"))
     return {}
 
 
 def save_hashes(hashes: dict):
-    """Ghi dict hash xuống file JSON."""
+    """Persist hash dict to disk as JSON."""
     HASH_FILE.write_text(
         json.dumps(hashes, indent=2, ensure_ascii=False),
         encoding="utf-8",
@@ -90,59 +79,57 @@ def save_hashes(hashes: dict):
 
 def article_slug(article: dict) -> str:
     """
-    Tạo tên file từ URL bài viết.
-    Ví dụ: URL = ".../360001234567-how-to-add-youtube"
-           → slug = "360001234567-how-to-add-youtube"
+    Derive a filesystem-safe slug from the article URL.
+
+    Example:
+      URL   = ".../articles/360001234567-how-to-add-youtube"
+      slug  = "360001234567-how-to-add-youtube"
     """
-    # html_url ví dụ: "https://support.optisigns.com/hc/en-us/articles/360001234567-how-to-add-youtube"
-    # .rstrip("/")  : xóa dấu / cuối nếu có
-    # .split("/")   : tách theo /
-    # [-1]          : lấy phần tử cuối cùng
+    # html_url: "https://support.optisigns.com/hc/en-us/articles/<slug>"
+    # .rstrip("/")  removes a trailing slash if present
+    # .split("/")   splits on every slash
+    # [-1]          takes the last segment
     return article["html_url"].rstrip("/").split("/")[-1]
 
 
 # -----------------------------------------------------------------
-# Hàm chính
+# Main
 # -----------------------------------------------------------------
 
 def scrape() -> list[str]:
     """
-    Chạy toàn bộ pipeline scrape:
-      1. Tải danh sách bài từ Zendesk
-      2. So sánh hash — bỏ qua bài không thay đổi
-      3. Chuyển HTML → Markdown, lưu file
-      4. Cập nhật hash file
-      5. Trả về danh sách slug của bài đã thay đổi (để upload)
+    Run the full scrape pipeline:
+      1. Fetch all articles from Zendesk
+      2. Skip articles whose content hash hasn't changed
+      3. Convert changed articles HTML → Markdown and write to disk
+      4. Save updated hashes
 
     Returns:
-      List[str] — các slug cần upload lên OpenAI
+      List of slugs that were added or updated (to be uploaded to OpenAI)
     """
-    ARTICLES_DIR.mkdir(exist_ok=True)  # tạo thư mục nếu chưa có
+    ARTICLES_DIR.mkdir(exist_ok=True)
 
     print("Fetching articles from Zendesk...")
     articles = fetch_all_articles()
     print(f"Total articles found: {len(articles)}")
 
-    hashes = load_hashes()  # hash của lần chạy trước
+    hashes = load_hashes()
 
     added = 0
     updated = 0
     skipped = 0
-    changed_slugs = []  # danh sách bài cần upload
+    changed_slugs = []
 
     for article in articles:
         slug = article_slug(article)
-        body_html = article.get("body") or ""  # nội dung HTML của bài
-
-        # Tính hash của nội dung mới
+        body_html = article.get("body") or ""
         new_hash = compute_hash(body_html)
 
-        # Nếu hash giống lần trước → bài không thay đổi → bỏ qua
+        # Content unchanged — skip
         if hashes.get(slug) == new_hash:
             skipped += 1
-            continue  # nhảy sang bài tiếp theo
+            continue
 
-        # Bài mới hoặc đã thay đổi → xử lý
         markdown = html_to_markdown(
             html=body_html,
             title=article["title"],
@@ -150,12 +137,9 @@ def scrape() -> list[str]:
         )
 
         filepath = ARTICLES_DIR / f"{slug}.md"
-        is_new = not filepath.exists()  # file chưa tồn tại = bài mới
+        is_new = not filepath.exists()
 
-        # Ghi file Markdown
         filepath.write_text(markdown, encoding="utf-8")
-
-        # Cập nhật hash
         hashes[slug] = new_hash
         changed_slugs.append(slug)
 
@@ -164,9 +148,7 @@ def scrape() -> list[str]:
         else:
             updated += 1
 
-    # Lưu hash mới xuống đĩa
     save_hashes(hashes)
 
-    # In tổng kết
     print(f"\nScrape complete — added={added}  updated={updated}  skipped={skipped}")
     return changed_slugs

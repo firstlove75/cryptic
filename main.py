@@ -1,20 +1,17 @@
 """
-Entry point của toàn bộ pipeline.
-Docker sẽ chạy file này mỗi ngày.
+Pipeline entry point — Docker runs this file once per day.
 
-Luồng:
-  1. Đọc biến môi trường từ file .env (nếu chạy local)
-  2. Scrape bài mới/thay đổi từ Zendesk
-  3. Upload delta lên OpenAI Vector Store
-  4. Gắn Vector Store vào Assistant
+Flow:
+  1. Load environment variables from .env (local runs only)
+  2. Scrape new/changed articles from Zendesk
+  3. Upload the delta to the OpenAI Vector Store
+  4. Attach the Vector Store to the Assistant
 """
 
-# python-dotenv: đọc file .env và nạp vào os.environ
-# load_dotenv() phải gọi TRƯỚC khi import các module dùng os.environ
+# load_dotenv() must be called before importing modules that read os.environ
 from dotenv import load_dotenv
-load_dotenv()  # đọc file .env trong thư mục hiện tại
+load_dotenv()
 
-# Import sau khi đã load .env
 from scraper.scrape import scrape
 from uploader.upload import upload_changed_files, attach_vector_store_to_assistant, get_client
 
@@ -24,16 +21,13 @@ def main():
     print("OptiBot daily sync — START")
     print("=" * 50)
 
-    # --- Bước 1: Scrape ---
-    # Trả về list slug của bài mới/thay đổi
+    # Step 1: Scrape — returns slugs of articles that are new or changed
     changed_slugs = scrape()
 
-    # --- Bước 2: Upload ---
-    # Nếu không có gì thay đổi, hàm này vẫn chạy nhưng không upload gì
+    # Step 2: Upload — no-ops if nothing changed
     vector_store_id = upload_changed_files(changed_slugs)
 
-    # --- Bước 3: Gắn vào Assistant ---
-    # Làm mỗi lần để đảm bảo assistant luôn dùng đúng vector store
+    # Step 3: Attach — keeps the assistant pointed at the correct vector store
     client = get_client()
     attach_vector_store_to_assistant(client, vector_store_id)
 
@@ -42,8 +36,7 @@ def main():
     print("=" * 50)
 
 
-# Đây là cách Python chạy file trực tiếp
-# Khi Docker chạy "python main.py", điều kiện này là True
-# Khi file được import bởi file khác, điều kiện này là False
+# True when Docker runs "python main.py" directly
+# False when this file is imported by another module
 if __name__ == "__main__":
     main()

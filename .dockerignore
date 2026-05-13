@@ -1,4 +1,4 @@
-# Không copy các file này vào Docker image
+# Exclude these files from the Docker build context
 .env
 .article_hashes.json
 .upload_state.json
