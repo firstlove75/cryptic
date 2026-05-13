@@ -1,0 +1,8 @@
+.env
+.article_hashes.json
+.upload_state.json
+articles/
+__pycache__/
+*.pyc
+*.pyo
+.DS_Store

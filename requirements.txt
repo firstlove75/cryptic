@@ -1,0 +1,6 @@
+requests
+beautifulsoup4
+lxml
+markdownify
+openai>=1.14.0
+python-dotenv
